@@ -1,0 +1,38 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: .
+    image: docai:latest
+    ports: ["8000:8000"]
+    environment: &env
+      DOCAI_REDIS_URL: redis://redis:6379/0
+      DOCAI_MODEL_PATH: ${DOCAI_MODEL_PATH:-/models/invoice-layoutlmv3}
+      DOCAI_PROCESSOR_PATH: microsoft/layoutlmv3-base
+    volumes: &volumes
+      - uploads:/data/uploads        # shared so workers can read what the API received
+      - ./models:/models:ro          # fine-tuned checkpoint(s)
+    depends_on:
+      redis: { condition: service_healthy }
+
+  worker:
+    image: docai:latest
+    command: ["celery", "-A", "docai.api.celery_app", "worker", "--loglevel=INFO", "--concurrency=1"]
+    environment: *env
+    volumes: *volumes
+    healthcheck:
+      disable: true
+    depends_on:
+      redis: { condition: service_healthy }
+      api: { condition: service_started }   # ensures the image is built first
+    deploy:
+      replicas: 2
+
+volumes:
+  uploads:
